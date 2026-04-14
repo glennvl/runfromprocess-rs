@@ -15,32 +15,8 @@ use windows::{
         },
         UI::WindowsAndMessaging::SW_SHOW,
     },
-    core::PWSTR,
+    core::{Error, PWSTR},
 };
-
-fn main() {
-    // parse args
-    let args: Vec<String> = std::env::args().collect();
-    let procname = std::path::Path::new(args[0].as_str())
-        .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap();
-
-    if args.len() < 3 {
-        println!("Usage: {} <ppid> <commandline>", procname);
-        return;
-    }
-
-    let ppid: u32 = args[1].parse().unwrap();
-
-    // parent process spoofing
-    let phandle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, ppid).unwrap() };
-    create_process_with_handle(phandle, &args[2..]).unwrap();
-    unsafe {
-        CloseHandle(phandle).expect("Failed closing handle");
-    }
-}
 
 pub fn create_process_with_handle(
     handle: HANDLE,
@@ -129,7 +105,7 @@ pub fn create_process_with_handle(
                 GetProcessHeap().unwrap(),
                 HEAP_NONE,
                 Some(si.lpAttributeList.0),
-            )?
+            )?;
         }
 
         match ret {
@@ -144,4 +120,30 @@ pub fn create_process_with_handle(
             }
         }
     }
+}
+
+fn main() -> Result<(), Error> {
+    // parse args
+    let args: Vec<String> = std::env::args().collect();
+    let procname = std::path::Path::new(args[0].as_str())
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+
+    if args.len() < 3 {
+        println!("Usage: {} <ppid> <commandline>", procname);
+        return Ok(());
+    }
+
+    let ppid: u32 = args[1].parse().unwrap();
+
+    // parent process spoofing
+    let phandle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, ppid).unwrap() };
+    create_process_with_handle(phandle, &args[2..]).unwrap();
+    unsafe {
+        CloseHandle(phandle).expect("Failed closing handle");
+    }
+
+    Ok(())
 }
