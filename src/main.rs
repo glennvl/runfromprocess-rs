@@ -1,21 +1,21 @@
 use std::mem::{size_of, zeroed};
 
 use windows::{
-    core::PWSTR,
     Win32::{
         Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE},
         System::{
-            Memory::{GetProcessHeap, HeapAlloc, HeapFree, HEAP_NONE, HEAP_ZERO_MEMORY},
+            Memory::{GetProcessHeap, HEAP_NONE, HEAP_ZERO_MEMORY, HeapAlloc, HeapFree},
             Threading::{
-                CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
-                OpenProcess, UpdateProcThreadAttribute, CREATE_UNICODE_ENVIRONMENT,
-                EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_ALL_ACCESS,
-                PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, STARTF_USESHOWWINDOW,
-                STARTUPINFOEXW,
+                CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+                EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
+                LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS,
+                PROCESS_ALL_ACCESS, PROCESS_INFORMATION, STARTF_USESHOWWINDOW, STARTUPINFOEXW,
+                UpdateProcThreadAttribute,
             },
         },
         UI::WindowsAndMessaging::SW_SHOW,
     },
+    core::PWSTR,
 };
 
 fn main() {
@@ -34,53 +34,50 @@ fn main() {
 
     let ppid: u32 = args[1].parse().unwrap();
 
-    // open target process
-    let phandle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, ppid).unwrap() };
-
     // parent process spoofing
+    let phandle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, ppid).unwrap() };
+    create_process_with_handle(phandle, &args[2..]).unwrap();
     unsafe {
-        create_process_with_handle(phandle, &args[2..]).unwrap();
         CloseHandle(phandle).expect("Failed closing handle");
-    };
+    }
 }
 
-/// # Safety
-///
-/// Unsafe
-pub unsafe fn create_process_with_handle(
+pub fn create_process_with_handle(
     handle: HANDLE,
     args: &[String],
 ) -> Result<u32, windows::core::Error> {
-    let mut si: STARTUPINFOEXW = zeroed();
-    let mut pi: PROCESS_INFORMATION = zeroed();
+    let mut si: STARTUPINFOEXW = unsafe { zeroed() };
+    let mut pi: PROCESS_INFORMATION = unsafe { zeroed() };
     let mut size: usize = 0x30;
 
     loop {
         if size > 1024 {
-            return Err(windows::core::Error::from_win32());
+            return Err(windows::core::Error::from_thread());
         }
 
         si.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-        si.lpAttributeList = LPPROC_THREAD_ATTRIBUTE_LIST(HeapAlloc(
-            GetProcessHeap().unwrap(),
-            HEAP_ZERO_MEMORY,
-            size,
-        ));
+        si.lpAttributeList = LPPROC_THREAD_ATTRIBUTE_LIST(unsafe {
+            HeapAlloc(GetProcessHeap().unwrap(), HEAP_ZERO_MEMORY, size)
+        });
 
         if si.lpAttributeList.is_invalid() {
-            return Err(windows::core::Error::from_win32());
+            return Err(windows::core::Error::from_thread());
         }
-        let ret = match InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &mut size) {
+        let ret = match unsafe {
+            InitializeProcThreadAttributeList(Some(si.lpAttributeList), 1, Some(0), &mut size)
+        } {
             Ok(()) => {
-                UpdateProcThreadAttribute(
-                    si.lpAttributeList,
-                    0,
-                    PROC_THREAD_ATTRIBUTE_PARENT_PROCESS as usize,
-                    Some(&handle as *const _ as *mut _),
-                    size_of::<HANDLE>(),
-                    None,
-                    None,
-                )?;
+                unsafe {
+                    UpdateProcThreadAttribute(
+                        si.lpAttributeList,
+                        0,
+                        PROC_THREAD_ATTRIBUTE_PARENT_PROCESS as usize,
+                        Some(&handle as *const _ as *mut _),
+                        size_of::<HANDLE>(),
+                        None,
+                        None,
+                    )?;
+                }
 
                 si.StartupInfo.dwFlags = STARTF_USESHOWWINDOW;
                 si.StartupInfo.wShowWindow = SW_SHOW.0 as _;
@@ -90,21 +87,25 @@ pub unsafe fn create_process_with_handle(
 
                 // println!("CMD len {}", cmdline.len());
 
-                CreateProcessW(
-                    None,
-                    PWSTR::from_raw(cmdline.as_mut_ptr()),
-                    None,
-                    None,
-                    false,
-                    CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-                    None,
-                    None,
-                    &si.StartupInfo,
-                    &mut pi,
-                )?;
+                unsafe {
+                    CreateProcessW(
+                        None,
+                        Some(PWSTR::from_raw(cmdline.as_mut_ptr())),
+                        None,
+                        None,
+                        false,
+                        CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                        None,
+                        None,
+                        &si.StartupInfo,
+                        &mut pi,
+                    )?;
+                }
 
-                CloseHandle(pi.hThread)?;
-                CloseHandle(pi.hProcess)?;
+                unsafe {
+                    CloseHandle(pi.hThread)?;
+                    CloseHandle(pi.hProcess)?;
+                }
 
                 Ok(pi.dwProcessId)
             }
@@ -119,13 +120,17 @@ pub unsafe fn create_process_with_handle(
         };
 
         if !si.lpAttributeList.is_invalid() {
-            DeleteProcThreadAttributeList(si.lpAttributeList);
+            unsafe {
+                DeleteProcThreadAttributeList(si.lpAttributeList);
+            }
         }
-        HeapFree(
-            GetProcessHeap().unwrap(),
-            HEAP_NONE,
-            Some(si.lpAttributeList.0),
-        )?;
+        unsafe {
+            HeapFree(
+                GetProcessHeap().unwrap(),
+                HEAP_NONE,
+                Some(si.lpAttributeList.0),
+            )?
+        }
 
         match ret {
             Ok(0) => {
