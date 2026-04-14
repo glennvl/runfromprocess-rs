@@ -18,8 +18,18 @@ use windows::{
     core::{Error, PWSTR},
 };
 
+pub struct ScopedHandle(HANDLE);
+
+impl Drop for ScopedHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
 pub fn create_process_with_handle(
-    handle: HANDLE,
+    parent: ScopedHandle,
     args: &[String],
 ) -> Result<u32, windows::core::Error> {
     let mut si: STARTUPINFOEXW = unsafe { zeroed() };
@@ -48,7 +58,7 @@ pub fn create_process_with_handle(
                         si.lpAttributeList,
                         0,
                         PROC_THREAD_ATTRIBUTE_PARENT_PROCESS as usize,
-                        Some(&handle as *const _ as *mut _),
+                        Some(&parent.0 as *const _ as *mut _),
                         size_of::<HANDLE>(),
                         None,
                         None,
@@ -78,10 +88,8 @@ pub fn create_process_with_handle(
                     )?;
                 }
 
-                unsafe {
-                    CloseHandle(pi.hThread)?;
-                    CloseHandle(pi.hProcess)?;
-                }
+                let _ = ScopedHandle(pi.hThread);
+                let _ = ScopedHandle(pi.hProcess);
 
                 Ok(pi.dwProcessId)
             }
@@ -122,6 +130,12 @@ pub fn create_process_with_handle(
     }
 }
 
+pub fn open_parent_process(ppid: u32) -> Result<ScopedHandle, Error> {
+    let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, ppid)? };
+    let handle = ScopedHandle(handle);
+    return Ok(handle);
+}
+
 fn main() -> Result<(), Error> {
     // parse args
     let args: Vec<String> = std::env::args().collect();
@@ -139,11 +153,8 @@ fn main() -> Result<(), Error> {
     let ppid: u32 = args[1].parse().unwrap();
 
     // parent process spoofing
-    let phandle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, ppid).unwrap() };
-    create_process_with_handle(phandle, &args[2..]).unwrap();
-    unsafe {
-        CloseHandle(phandle).expect("Failed closing handle");
-    }
+    let parent: ScopedHandle = open_parent_process(ppid)?;
+    create_process_with_handle(parent, &args[2..])?;
 
     Ok(())
 }
