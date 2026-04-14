@@ -1,0 +1,20 @@
+{
+  "name": "runfromprocess-rs-devcontainer",
+  "image": "mcr.microsoft.com/devcontainers/base:debian",
+  "features": {
+    "ghcr.io/MartinAskestad/features/mingw": {},
+    "ghcr.io/devcontainers/features/rust": {
+      "targets": "x86_64-pc-windows-gnu"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "vadimcn.vscode-lldb",
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  },
+  "remoteUser": "vscode"
+}
