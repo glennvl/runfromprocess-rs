@@ -19,10 +19,7 @@ fn open_parent_process(pid: u32) -> io::Result<OwnedHandle> {
 fn launch_child_process(child: &mut Command, parent: &OwnedHandle) -> io::Result<Child> {
     let parent_handle = parent.as_raw_handle();
     let attribute_list = ProcThreadAttributeList::build()
-        .attribute(
-            PROC_THREAD_ATTRIBUTE_PARENT_PROCESS,
-            &parent_handle,
-        )
+        .attribute(PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, &parent_handle)
         .finish()
         .unwrap();
 
@@ -32,13 +29,9 @@ fn launch_child_process(child: &mut Command, parent: &OwnedHandle) -> io::Result
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
-    let proc_name = Path::new(&args[0])
-        .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap();
 
     if args.len() < 3 {
+        let proc_name = Path::new(&args[0]).file_name().unwrap().to_str().unwrap();
         println!("Usage: {} <parent pid> <child program> [<child program arg> ...]", proc_name);
         return Ok(());
     }
@@ -47,9 +40,7 @@ fn main() -> io::Result<()> {
     let parent = open_parent_process(ppid)?;
 
     let mut child = Command::new(fs::canonicalize(&args[2])?);
-    args[3..].iter().for_each(|arg| {
-        child.raw_arg(arg);
-    });
+    args[3..].iter().for_each(|arg| { child.raw_arg(arg); });
 
     launch_child_process(&mut child, &parent)?;
     Ok(())
