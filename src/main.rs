@@ -1,160 +1,56 @@
-use std::mem::{size_of, zeroed};
+#![cfg_attr(windows, feature(windows_process_extensions_raw_attribute))]
 
-use windows::{
-    Win32::{
-        Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER, HANDLE},
-        System::{
-            Memory::{GetProcessHeap, HEAP_NONE, HEAP_ZERO_MEMORY, HeapAlloc, HeapFree},
-            Threading::{
-                CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-                EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
-                LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS,
-                PROCESS_ALL_ACCESS, PROCESS_INFORMATION, STARTF_USESHOWWINDOW, STARTUPINFOEXW,
-                UpdateProcThreadAttribute,
-            },
-        },
-        UI::WindowsAndMessaging::SW_SHOW,
-    },
-    core::{Error, PWSTR},
-};
+use std::{env, fs, io};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::process::{CommandExt, ProcThreadAttributeList};
+use std::path::Path;
+use std::process::{Child, Command};
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_ALL_ACCESS};
 
-pub struct ScopedHandle(HANDLE);
+const PROC_THREAD_ATTRIBUTE_PARENT_PROCESS: usize = 0x00020000;
 
-impl Drop for ScopedHandle {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
+fn open_parent_process(pid: u32) -> io::Result<OwnedHandle> {
+    let handle: HANDLE = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, pid)? };
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+    Ok(handle)
 }
 
-pub fn create_process_with_handle(
-    parent: ScopedHandle,
-    args: &[String],
-) -> Result<u32, windows::core::Error> {
-    let mut si: STARTUPINFOEXW = unsafe { zeroed() };
-    let mut pi: PROCESS_INFORMATION = unsafe { zeroed() };
-    let mut size: usize = 0x30;
+fn launch_child_process(child: &mut Command, parent: &OwnedHandle) -> io::Result<Child> {
+    let parent_handle = parent.as_raw_handle();
+    let attribute_list = ProcThreadAttributeList::build()
+        .attribute(
+            PROC_THREAD_ATTRIBUTE_PARENT_PROCESS,
+            &parent_handle,
+        )
+        .finish()
+        .unwrap();
 
-    loop {
-        if size > 1024 {
-            return Err(windows::core::Error::from_thread());
-        }
-
-        si.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
-        si.lpAttributeList = LPPROC_THREAD_ATTRIBUTE_LIST(unsafe {
-            HeapAlloc(GetProcessHeap().unwrap(), HEAP_ZERO_MEMORY, size)
-        });
-
-        if si.lpAttributeList.is_invalid() {
-            return Err(windows::core::Error::from_thread());
-        }
-        let ret = match unsafe {
-            InitializeProcThreadAttributeList(Some(si.lpAttributeList), 1, Some(0), &mut size)
-        } {
-            Ok(()) => {
-                unsafe {
-                    UpdateProcThreadAttribute(
-                        si.lpAttributeList,
-                        0,
-                        PROC_THREAD_ATTRIBUTE_PARENT_PROCESS as usize,
-                        Some(&parent.0 as *const _ as *mut _),
-                        size_of::<HANDLE>(),
-                        None,
-                        None,
-                    )?;
-                }
-
-                si.StartupInfo.dwFlags = STARTF_USESHOWWINDOW;
-                si.StartupInfo.wShowWindow = SW_SHOW.0 as _;
-
-                let mut cmdline: Vec<_> = args.join(" ").encode_utf16().collect();
-                cmdline.push(0x0);
-
-                // println!("CMD len {}", cmdline.len());
-
-                unsafe {
-                    CreateProcessW(
-                        None,
-                        Some(PWSTR::from_raw(cmdline.as_mut_ptr())),
-                        None,
-                        None,
-                        false,
-                        CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-                        None,
-                        None,
-                        &si.StartupInfo,
-                        &mut pi,
-                    )?;
-                }
-
-                let _ = ScopedHandle(pi.hThread);
-                let _ = ScopedHandle(pi.hProcess);
-
-                Ok(pi.dwProcessId)
-            }
-            // Err(windows::core::Error::from(ERROR_INSUFFICIENT_BUFFER)) => {}
-            Err(e) => {
-                if e != windows::core::Error::from(ERROR_INSUFFICIENT_BUFFER) {
-                    Err(e)
-                } else {
-                    Ok(0)
-                }
-            }
-        };
-
-        if !si.lpAttributeList.is_invalid() {
-            unsafe {
-                DeleteProcThreadAttributeList(si.lpAttributeList);
-            }
-        }
-        unsafe {
-            HeapFree(
-                GetProcessHeap().unwrap(),
-                HEAP_NONE,
-                Some(si.lpAttributeList.0),
-            )?;
-        }
-
-        match ret {
-            Ok(0) => {
-                continue;
-            }
-            Ok(pid) => {
-                return Ok(pid);
-            }
-            Err(e) => {
-                return Err(e);
-            }
-        }
-    }
+    let child_process = child.spawn_with_attributes(&attribute_list)?;
+    Ok(child_process)
 }
 
-pub fn open_parent_process(ppid: u32) -> Result<ScopedHandle, Error> {
-    let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, ppid)? };
-    let handle = ScopedHandle(handle);
-    return Ok(handle);
-}
-
-fn main() -> Result<(), Error> {
-    // parse args
-    let args: Vec<String> = std::env::args().collect();
-    let procname = std::path::Path::new(args[0].as_str())
+fn main() -> io::Result<()> {
+    let args: Vec<String> = env::args().collect();
+    let proc_name = Path::new(&args[0])
         .file_name()
         .unwrap()
         .to_str()
         .unwrap();
 
     if args.len() < 3 {
-        println!("Usage: {} <ppid> <commandline>", procname);
+        println!("Usage: {} <parent pid> <child program> [<child program arg> ...]", proc_name);
         return Ok(());
     }
 
     let ppid: u32 = args[1].parse().unwrap();
+    let parent = open_parent_process(ppid)?;
 
-    // parent process spoofing
-    let parent: ScopedHandle = open_parent_process(ppid)?;
-    create_process_with_handle(parent, &args[2..])?;
+    let mut child = Command::new(fs::canonicalize(&args[2])?);
+    if args.len() > 3 {
+        child.args(&args[3..]);
+    }
 
+    launch_child_process(&mut child, &parent)?;
     Ok(())
 }
