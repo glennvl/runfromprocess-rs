@@ -1,0 +1,14 @@
+{
+  "features": {
+    "ghcr.io/devcontainers/features/rust": {
+      "version": "1.5.1",
+      "resolved": "ghcr.io/devcontainers/features/rust@sha256:f7afd923fd283db88ca961342ae65ea63a8c95bcf86e42c4c363f43bc4ba26a5",
+      "integrity": "sha256:f7afd923fd283db88ca961342ae65ea63a8c95bcf86e42c4c363f43bc4ba26a5"
+    },
+    "ghcr.io/MartinAskestad/features/mingw": {
+      "version": "1.0.0",
+      "resolved": "ghcr.io/martinaskestad/features/mingw@sha256:72a3fe8630ccb8cff09f2b6e51643b7301bf1a7e6e1f2fd6da9dfe10290bb67e",
+      "integrity": "sha256:72a3fe8630ccb8cff09f2b6e51643b7301bf1a7e6e1f2fd6da9dfe10290bb67e"
+    }
+  }
+}
