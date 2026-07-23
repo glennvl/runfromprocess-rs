@@ -47,9 +47,9 @@ fn main() -> io::Result<()> {
     let parent = open_parent_process(ppid)?;
 
     let mut child = Command::new(fs::canonicalize(&args[2])?);
-    if args.len() > 3 {
-        child.args(&args[3..]);
-    }
+    args[3..].iter().for_each(|arg| {
+        child.raw_arg(arg);
+    });
 
     launch_child_process(&mut child, &parent)?;
     Ok(())
